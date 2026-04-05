@@ -168,11 +168,25 @@ where
             self.tail = Some(idx);
         }
     }
+
+    pub fn iter(&self) -> impl Iterator<Item = (&K, &V)> {
+        self.map.iter().map(|(k, &idx)| {
+            let node = self.nodes[idx].as_ref().unwrap();
+            (k, &node.value)
+        })
+    }
+
+    pub fn touch(&mut self, key: &K) -> bool {
+        if let Some(&idx) = self.map.get(key) {
+            self.move_to_front(idx);
+            true
+        } else {
+            false
+        }
+    }
 }
 
-
 // TESTS
-
 #[cfg(test)]
 mod tests {
     use super::LruCache;

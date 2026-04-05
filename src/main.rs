@@ -20,7 +20,8 @@ struct CacheEntry {
 
 #[derive(Debug)]
 struct AppState{
-    entries: Vec<CacheEntry>, // placeholder, later the LRU as cache: LruCache<...,...>
+    //entries: Vec<CacheEntry>, // placeholder, later the LRU as cache: LruCache<...,...>
+    cache: LruCache<String, CacheEntry>,
     hit_count: usize,
     miss_count: usize,
 }
@@ -88,7 +89,8 @@ async fn cache(
         .lock()
         .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "mutex poisoned".to_string()))?;
 
-    s.entries.push(entry);
+    //s.entries.push(entry);
+    s.cache.insert(entry.query.clone(), entry);
     Ok(StatusCode::CREATED)
 }
 
@@ -100,26 +102,65 @@ async fn lookup(
         .lock()
         .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "mutex poisoned".to_string()))?;
 
-    let mut best_index: Option<usize> = None; //Some(value) or None
-    let mut best_similarity = f32::NEG_INFINITY;
+    // let mut best_key: Option<String> = None;
+    // let mut best_response: Option<String> = None;
+    // let mut best_similarity = f32::NEG_INFINITY;
 
-    for (i, entry) in s.entries.iter().enumerate() {
-        let sim = cosine_similarity(&req.embedding, &entry.embedding)
-            .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
+    // for (key, entry) in s.cache.iter() {
+    //     let sim = cosine_similarity(&req.embedding, &entry.embedding)
+    //         .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
 
-        if sim > best_similarity {
-            best_similarity = sim;
-            best_index = Some(i);
+    //     if sim > best_similarity {
+    //         best_similarity = sim;
+    //         best_key = Some(key.clone());
+    //         best_response = Some(entry.response.clone());
+    //     }
+    // }
+
+    // match (best_key, best_response) {
+    //     (Some(key), Some(response)) if best_similarity >= req.threshold => {
+    //         s.hit_count += 1;
+    //         s.cache.touch(&key);
+
+    //         Ok(Json(LookupResponse {
+    //             query: key,
+    //             response,
+    //             similarity: best_similarity,
+    //         }))
+    //     }
+    //     _ => {
+    //         s.miss_count += 1;
+    //         Err((StatusCode::NOT_FOUND, "no matching cached response".to_string()))
+    //     }
+    // }
+
+    let (best_key, best_response, best_similarity) = {
+        let mut best_key: Option<String> = None;
+        let mut best_response: Option<String> = None;
+        let mut best_similarity = f32::NEG_INFINITY;
+
+        for (key, entry) in s.cache.iter() {
+            let sim = cosine_similarity(&req.embedding, &entry.embedding)
+                .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
+
+            if sim > best_similarity {
+                best_similarity = sim;
+                best_key = Some(key.clone());
+                best_response = Some(entry.response.clone());
+            }
         }
-    }
 
-    match best_index {
-        Some(i) if best_similarity >= req.threshold => {
+        (best_key, best_response, best_similarity)
+    };
+
+    match (best_key, best_response) {
+        (Some(key), Some(response)) if best_similarity >= req.threshold => {
             s.hit_count += 1;
-            let entry = &s.entries[i];
+            s.cache.touch(&key);
+
             Ok(Json(LookupResponse {
-                query: entry.query.clone(),
-                response: entry.response.clone(),
+                query: key,
+                response,
                 similarity: best_similarity,
             }))
         }
@@ -133,7 +174,8 @@ async fn lookup(
 #[tokio::main]
 async fn main(){
     let state: SharedState = Arc::new(Mutex::new(AppState {
-        entries: vec![],
+        //entries: vec![],
+        cache: LruCache::new(2),
         hit_count: 0,
         miss_count: 0,
     }));
