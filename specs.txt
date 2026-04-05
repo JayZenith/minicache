@@ -1,0 +1,87 @@
+Take-Home Project: minicache
+Async Semantic Cache Server
+
+Overview
+
+Build a small HTTP server that acts as a semantic cache. Given a query, it checks if a semantically similar query has been cached and returns the cached response. If no match is found, it stores the new query-response pair for future lookups. The spec below is geared towards Rust and Rust is preferred, but it is not required. If you want to use C or any other programming language to implement it - go for it!
+
+This project is a miniature version of a real system at WorldFlow AI. There are no trick questions — we want to see how you think about systems problems.
+
+Time budget: ~1-2 weeks
+
+
+Core Requirements
+
+1. LRU Cache (from scratch)
+
+Implement a generic LruCache<K, V> without using an external LRU crate. It must support:
+
+    get(&key) -> Option<&V> — retrieves a value and marks the entry as recently used
+    insert(key, value) — inserts a new entry; evicts the least-recently-used entry when at capacity
+    Configurable maximum capacity
+    Target O(1) time complexity for both operations (HashMap + doubly-linked list)
+
+2. Cosine Similarity
+
+Implement cosine similarity between two Vec<f32> vectors. Do not use an external math crate — write the dot product and magnitude calculations directly.
+
+Handle edge cases:
+    Zero-magnitude vectors
+    Vectors of mismatched length (return an error)
+
+3. Async HTTP API
+
+Use axum (preferred) or actix-web (or if you are using another programming language then choose a good HTTP framework for that language) to expose the following endpoints:
+
+    POST /cache
+    Body: { "query": "...", "embedding": [f32], "response": "..." }
+    Stores a query-response pair along with its embedding vector.
+
+    POST /lookup
+    Body: { "query": "...", "embedding": [f32], "threshold": f32 }
+    Returns the cached response whose stored embedding has cosine similarity >= threshold. Returns 404 if no match.
+
+    GET /health
+    Returns 200 OK.
+
+4. Concurrency
+
+The cache must be safe to access from multiple concurrent requests. Use Arc<RwLock<...>> or Arc<Mutex<...>>.
+
+Include a comment in the code explaining which you chose and why — specifically the tradeoff between read-heavy vs. write-heavy workloads.
+
+5. Error Handling
+
+    Use proper error handling and HTTP status codes.
+
+
+
+Stretch Goals
+
+These are optional.
+6. TTL Expiry
+
+Entries expire after a configurable duration. Implement an eviction strategy.
+
+7. Metrics Endpoint
+
+GET /stats returns:
+
+    { "hit_count": 42, "miss_count": 18, "cache_size": 30, "hit_rate": 0.70 }
+
+
+8. Batch Lookup
+
+POST /lookup/batch accepts an array of lookup queries, processes them concurrently using tokio::JoinSet or futures::join_all, and returns all results in a single response.
+
+
+Deliverables
+
+    GitHub repository — public or private (if private, invite zbennett10)
+    README.md containing:
+How to build and run the project
+Design decisions you made and why
+What you would improve with more time
+Tests — at minimum:
+Unit tests for LRU eviction correctness (eviction order, capacity 1, duplicate key inserts)
+Unit tests for cosine similarity edge cases (zero vectors, identical vectors, orthogonal vectors)
