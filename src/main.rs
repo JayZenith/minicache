@@ -49,6 +49,14 @@ struct LookupResponse {
     similarity: f32,
 }
 
+#[derive(Serialize)]
+struct StatsResponse {
+    hit_count: usize,
+    miss_count: usize,
+    cache_size: usize,
+    hit_rate: f64,
+}
+
 fn cosine_similarity(a: &[f32], b: &[f32]) -> Result<f32, String> {
     if a.len() != b.len() {
         return Err("embedding length mismatch".to_string());
@@ -102,38 +110,6 @@ async fn lookup(
         .lock()
         .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "mutex poisoned".to_string()))?;
 
-    // let mut best_key: Option<String> = None;
-    // let mut best_response: Option<String> = None;
-    // let mut best_similarity = f32::NEG_INFINITY;
-
-    // for (key, entry) in s.cache.iter() {
-    //     let sim = cosine_similarity(&req.embedding, &entry.embedding)
-    //         .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
-
-    //     if sim > best_similarity {
-    //         best_similarity = sim;
-    //         best_key = Some(key.clone());
-    //         best_response = Some(entry.response.clone());
-    //     }
-    // }
-
-    // match (best_key, best_response) {
-    //     (Some(key), Some(response)) if best_similarity >= req.threshold => {
-    //         s.hit_count += 1;
-    //         s.cache.touch(&key);
-
-    //         Ok(Json(LookupResponse {
-    //             query: key,
-    //             response,
-    //             similarity: best_similarity,
-    //         }))
-    //     }
-    //     _ => {
-    //         s.miss_count += 1;
-    //         Err((StatusCode::NOT_FOUND, "no matching cached response".to_string()))
-    //     }
-    // }
-
     let (best_key, best_response, best_similarity) = {
         let mut best_key: Option<String> = None;
         let mut best_response: Option<String> = None;
@@ -171,6 +147,28 @@ async fn lookup(
     }
 }
 
+async fn stats(
+    State(state): State<SharedState>,
+) -> Result<Json<StatsResponse>, (StatusCode, String)> {
+    let s = state
+        .lock()
+        .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "mutex poisoned".to_string()))?;
+
+    let total = s.hit_count + s.miss_count;
+    let hit_rate = if total == 0 {
+        0.0
+    } else {
+        s.hit_count as f64 / total as f64
+    };
+
+    Ok(Json(StatsResponse {
+        hit_count: s.hit_count,
+        miss_count: s.miss_count,
+        cache_size: s.cache.len(),
+        hit_rate,
+    }))
+}
+
 #[tokio::main]
 async fn main(){
     let state: SharedState = Arc::new(Mutex::new(AppState {
@@ -185,6 +183,7 @@ async fn main(){
         .route("/health", get(health))
         .route("/cache", post(cache))
         .route("/lookup", post(lookup))
+        .route("/stats", get(stats))
         .with_state(state);
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000")
