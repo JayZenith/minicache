@@ -83,10 +83,37 @@ async fn health() -> &'static str {
     "OK"
 }
 
+
+// VALIDATION HELPERS
+fn validate_embedding(embedding: &[f32]) -> Result<(), (StatusCode, String)> {
+    if embedding.is_empty() {
+        return Err((StatusCode::BAD_REQUEST, "embedding must not be empty".to_string()));
+    }
+    Ok(())
+}
+
+fn validate_threshold(threshold: f32) -> Result<(), (StatusCode, String)> {
+    if !(-1.0..=1.0).contains(&threshold) {
+        return Err((StatusCode::BAD_REQUEST, "threshold must be between -1.0 and 1.0".to_string()));
+    }
+    Ok(())
+}
+
+fn validate_non_empty(field_name: &str, value: &str) -> Result<(), (StatusCode, String)> {
+    if value.trim().is_empty() {
+        return Err((StatusCode::BAD_REQUEST, format!("{field_name} must not be empty")));
+    }
+    Ok(())
+}
+
 async fn cache(
     State(state): State<SharedState>,
     Json(req): Json<CacheRequest>,
 ) -> Result<StatusCode, (StatusCode, String)> {
+    validate_non_empty("query", &req.query)?;
+    validate_non_empty("response", &req.response)?;
+    validate_embedding(&req.embedding)?;
+
     let entry = CacheEntry {
         query: req.query,
         embedding: req.embedding,
@@ -106,6 +133,10 @@ async fn lookup(
     State(state): State<SharedState>,
     Json(req): Json<LookupRequest>,
 ) -> Result<Json<LookupResponse>, (StatusCode, String)> {
+    validate_non_empty("query", &req.query)?;
+    validate_embedding(&req.embedding)?;
+    validate_threshold(req.threshold)?;
+
     let mut s = state
         .lock()
         .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "mutex poisoned".to_string()))?;
