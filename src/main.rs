@@ -10,6 +10,7 @@ use axum::{
 
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
+use futures::future::join_all;
 
 #[derive(Clone, Debug)]
 struct CacheEntry {
@@ -57,6 +58,20 @@ struct StatsResponse {
     hit_rate: f64,
 }
 
+#[derive(Deserialize)]
+struct BatchLookupRequest {
+    requests: Vec<LookupRequest>,
+}
+
+#[derive(Serialize)]
+struct BatchLookupItem {
+    found: bool,
+    query: String,
+    response: Option<String>,
+    similarity: Option<f32>,
+    error: Option<String>,
+}
+
 fn cosine_similarity(a: &[f32], b: &[f32]) -> Result<f32, String> {
     if a.len() != b.len() {
         return Err("embedding length mismatch".to_string());
@@ -77,6 +92,41 @@ fn cosine_similarity(a: &[f32], b: &[f32]) -> Result<f32, String> {
     }
 
     Ok(dot / (norm_a.sqrt() * norm_b.sqrt()))
+}
+
+fn lookup_best_match(
+    cache: &mut LruCache<String, CacheEntry>,
+    req: &LookupRequest,
+) -> Result<Option<(String, String, f32)>, String> {
+    validate_non_empty("query", &req.query).map_err(|(_, e)| e)?;
+    validate_embedding(&req.embedding).map_err(|(_, e)| e)?;
+    validate_threshold(req.threshold).map_err(|(_, e)| e)?;
+
+    let (best_key, best_response, best_similarity) = {
+        let mut best_key: Option<String> = None;
+        let mut best_response: Option<String> = None;
+        let mut best_similarity = f32::NEG_INFINITY;
+
+        for (key, entry) in cache.iter() {
+            let sim = cosine_similarity(&req.embedding, &entry.embedding)?;
+
+            if sim > best_similarity {
+                best_similarity = sim;
+                best_key = Some(key.clone());
+                best_response = Some(entry.response.clone());
+            }
+        }
+
+        (best_key, best_response, best_similarity)
+    };
+
+    match (best_key, best_response) {
+        (Some(key), Some(response)) if best_similarity >= req.threshold => {
+            cache.touch(&key);
+            Ok(Some((key, response, best_similarity)))
+        }
+        _ => Ok(None),
+    }
 }
 
 async fn health() -> &'static str {
@@ -133,50 +183,125 @@ async fn lookup(
     State(state): State<SharedState>,
     Json(req): Json<LookupRequest>,
 ) -> Result<Json<LookupResponse>, (StatusCode, String)> {
-    validate_non_empty("query", &req.query)?;
-    validate_embedding(&req.embedding)?;
-    validate_threshold(req.threshold)?;
+    // validate_non_empty("query", &req.query)?;
+    // validate_embedding(&req.embedding)?;
+    // validate_threshold(req.threshold)?;
 
     let mut s = state
         .lock()
         .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "mutex poisoned".to_string()))?;
 
-    let (best_key, best_response, best_similarity) = {
-        let mut best_key: Option<String> = None;
-        let mut best_response: Option<String> = None;
-        let mut best_similarity = f32::NEG_INFINITY;
+    // let (best_key, best_response, best_similarity) = {
+    //     let mut best_key: Option<String> = None;
+    //     let mut best_response: Option<String> = None;
+    //     let mut best_similarity = f32::NEG_INFINITY;
 
-        for (key, entry) in s.cache.iter() {
-            let sim = cosine_similarity(&req.embedding, &entry.embedding)
-                .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
+    //     for (key, entry) in s.cache.iter() {
+    //         let sim = cosine_similarity(&req.embedding, &entry.embedding)
+    //             .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
 
-            if sim > best_similarity {
-                best_similarity = sim;
-                best_key = Some(key.clone());
-                best_response = Some(entry.response.clone());
-            }
-        }
+    //         if sim > best_similarity {
+    //             best_similarity = sim;
+    //             best_key = Some(key.clone());
+    //             best_response = Some(entry.response.clone());
+    //         }
+    //     }
 
-        (best_key, best_response, best_similarity)
-    };
+    //     (best_key, best_response, best_similarity)
+    // };
 
-    match (best_key, best_response) {
-        (Some(key), Some(response)) if best_similarity >= req.threshold => {
+    // match (best_key, best_response) {
+    //     (Some(key), Some(response)) if best_similarity >= req.threshold => {
+    //         s.hit_count += 1;
+    //         s.cache.touch(&key);
+
+    //         Ok(Json(LookupResponse {
+    //             query: key,
+    //             response,
+    //             similarity: best_similarity,
+    //         }))
+    //     }
+    //     _ => {
+    //         s.miss_count += 1;
+    //         Err((StatusCode::NOT_FOUND, "no matching cached response".to_string()))
+    //     }
+    // }
+
+    // lookup_best_match() owns matching logic and recency update
+    // /lookup does HTTP level handling
+    match lookup_best_match(&mut s.cache, &req){
+        Ok(Some((query, response, similarity))) => {
             s.hit_count += 1;
-            s.cache.touch(&key);
-
             Ok(Json(LookupResponse {
-                query: key,
+                query,
                 response,
-                similarity: best_similarity,
+                similarity,
             }))
         }
-        _ => {
+        Ok(None) => {
             s.miss_count += 1;
             Err((StatusCode::NOT_FOUND, "no matching cached response".to_string()))
         }
+        Err(e) => Err((StatusCode::BAD_REQUEST, e))
     }
 }
+
+async fn lookup_batch(
+    State(state): State<SharedState>,
+    Json(req): Json<BatchLookupRequest>,
+) -> Result<Json<Vec<BatchLookupItem>>, (StatusCode, String)> {
+    let futures = req.requests.into_iter().map(|lookup_req| {
+        let state = Arc::clone(&state);
+        async move {
+            let mut s = match state.lock() {
+                Ok(guard) => guard,
+                Err(_) => {
+                    return BatchLookupItem {
+                        found: false,
+                        query: lookup_req.query,
+                        response: None,
+                        similarity: None,
+                        error: Some("mutex poisoned".to_string()),
+                    }
+                }
+            };
+
+            match lookup_best_match(&mut s.cache, &lookup_req) {
+                Ok(Some((query, response, similarity))) => {
+                    s.hit_count += 1;
+                    BatchLookupItem {
+                        found: true,
+                        query,
+                        response: Some(response),
+                        similarity: Some(similarity),
+                        error: None,
+                    }
+                }
+                Ok(None) => {
+                    s.miss_count += 1;
+                    BatchLookupItem {
+                        found: false,
+                        query: lookup_req.query,
+                        response: None,
+                        similarity: None,
+                        error: None,
+                    }
+                }
+                Err(e) => BatchLookupItem {
+                    found: false,
+                    query: lookup_req.query,
+                    response: None,
+                    similarity: None,
+                    error: Some(e),
+                },
+            }
+        }
+    });
+
+    Ok(Json(join_all(futures).await))
+}
+
+
 
 async fn stats(
     State(state): State<SharedState>,
@@ -200,6 +325,8 @@ async fn stats(
     }))
 }
 
+
+
 #[tokio::main]
 async fn main(){
     let state: SharedState = Arc::new(Mutex::new(AppState {
@@ -215,6 +342,7 @@ async fn main(){
         .route("/cache", post(cache))
         .route("/lookup", post(lookup))
         .route("/stats", get(stats))
+        .route("/lookup/batch", post(lookup_batch))
         .with_state(state);
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000")
