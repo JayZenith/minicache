@@ -75,6 +75,42 @@ struct BatchLookupItem {
     error: Option<String>,
 }
 
+// ERROR HANDLING
+#[derive(Serialize)]
+struct ErrorResponse {
+    error: String,
+}
+
+type ApiError = (StatusCode, Json<ErrorResponse>);
+
+fn bad_request(message: impl Into<String>) -> ApiError {
+    (
+        StatusCode::BAD_REQUEST,
+        Json(ErrorResponse {
+            error: message.into(),
+        }),
+    )
+}
+
+fn internal_error(message: impl Into<String>) -> ApiError {
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(ErrorResponse {
+            error: message.into(),
+        }),
+    )
+}
+
+fn not_found(message: impl Into<String>) -> ApiError {
+    (
+        StatusCode::NOT_FOUND,
+        Json(ErrorResponse {
+            error: message.into(),
+        }),
+    )
+}
+
+
 fn cosine_similarity(a: &[f32], b: &[f32]) -> Result<f32, String> {
     if a.len() != b.len() {
         return Err("embedding length mismatch".to_string());
@@ -100,10 +136,14 @@ fn cosine_similarity(a: &[f32], b: &[f32]) -> Result<f32, String> {
 fn lookup_best_match(
     cache: &mut LruCache<String, CacheEntry>,
     req: &LookupRequest,
-) -> Result<Option<(String, String, f32)>, String> {
-    validate_non_empty("query", &req.query).map_err(|(_, e)| e)?;
-    validate_embedding(&req.embedding).map_err(|(_, e)| e)?;
-    validate_threshold(req.threshold).map_err(|(_, e)| e)?;
+) -> Result<Option<(String, String, f32)>, ApiError> {
+    // validate_non_empty("query", &req.query).map_err(|(_, e)| e)?;
+    // validate_embedding(&req.embedding).map_err(|(_, e)| e)?;
+    // validate_threshold(req.threshold).map_err(|(_, e)| e)?;
+    //
+    validate_non_empty("query", &req.query)?;
+    validate_embedding(&req.embedding)?;
+    validate_threshold(req.threshold)?;
 
     let (best_key, best_response, best_similarity) = {
         let mut best_key: Option<String> = None;
@@ -111,7 +151,8 @@ fn lookup_best_match(
         let mut best_similarity = f32::NEG_INFINITY;
 
         for (key, entry) in cache.iter() {
-            let sim = cosine_similarity(&req.embedding, &entry.embedding)?;
+            let sim = cosine_similarity(&req.embedding, &entry.embedding)
+                .map_err(bad_request)?;
 
             if sim > best_similarity {
                 best_similarity = sim;
@@ -138,23 +179,23 @@ async fn health() -> &'static str {
 
 
 // VALIDATION HELPERS
-fn validate_embedding(embedding: &[f32]) -> Result<(), (StatusCode, String)> {
+fn validate_embedding(embedding: &[f32]) -> Result<(), ApiError> {
     if embedding.is_empty() {
-        return Err((StatusCode::BAD_REQUEST, "embedding must not be empty".to_string()));
+        return Err(bad_request("embedding must not be empty"));
     }
     Ok(())
 }
 
-fn validate_threshold(threshold: f32) -> Result<(), (StatusCode, String)> {
+fn validate_threshold(threshold: f32) -> Result<(), ApiError> {
     if !(-1.0..=1.0).contains(&threshold) {
-        return Err((StatusCode::BAD_REQUEST, "threshold must be between -1.0 and 1.0".to_string()));
+        return Err(bad_request("threshold must be between -1.0 and 1.0"));
     }
     Ok(())
 }
 
-fn validate_non_empty(field_name: &str, value: &str) -> Result<(), (StatusCode, String)> {
+fn validate_non_empty(field_name: &str, value: &str) -> Result<(), ApiError> {
     if value.trim().is_empty() {
-        return Err((StatusCode::BAD_REQUEST, format!("{field_name} must not be empty")));
+        return Err(bad_request(format!("{field_name} must not be empty")));
     }
     Ok(())
 }
@@ -162,7 +203,7 @@ fn validate_non_empty(field_name: &str, value: &str) -> Result<(), (StatusCode, 
 async fn cache(
     State(state): State<SharedState>,
     Json(req): Json<CacheRequest>,
-) -> Result<StatusCode, (StatusCode, String)> {
+) -> Result<StatusCode, ApiError> {
     validate_non_empty("query", &req.query)?;
     validate_non_empty("response", &req.response)?;
     validate_embedding(&req.embedding)?;
@@ -176,7 +217,7 @@ async fn cache(
 
     let mut s = state // state is Arc<Mutex<AppState>>
         .lock()
-        .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "mutex poisoned".to_string()))?;
+        .map_err(|_| internal_error("mutex poisoned"))?;
 
     let ttl = s.ttl;
     prune_expired(&mut s.cache, ttl);
@@ -189,10 +230,10 @@ async fn cache(
 async fn lookup(
     State(state): State<SharedState>,
     Json(req): Json<LookupRequest>,
-) -> Result<Json<LookupResponse>, (StatusCode, String)> {
+) -> Result<Json<LookupResponse>, ApiError> {
     let mut s = state
         .lock()
-        .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "mutex poisoned".to_string()))?;
+        .map_err(|_| internal_error("mutex poisoned"))?;
 
     let ttl = s.ttl;
     prune_expired(&mut s.cache, ttl);
@@ -210,16 +251,16 @@ async fn lookup(
         }
         Ok(None) => {
             s.miss_count += 1;
-            Err((StatusCode::NOT_FOUND, "no matching cached response".to_string()))
+            Err(not_found("no matching cached response"))
         }
-        Err(e) => Err((StatusCode::BAD_REQUEST, e))
+        Err(e) => Err(e)
     }
 }
 
 async fn lookup_batch(
     State(state): State<SharedState>,
     Json(req): Json<BatchLookupRequest>,
-) -> Result<Json<Vec<BatchLookupItem>>, (StatusCode, String)> {
+) -> Result<Json<Vec<BatchLookupItem>>, ApiError> {
     let futures = req.requests.into_iter().map(|lookup_req| {
         let state = Arc::clone(&state);
         async move {
@@ -260,12 +301,12 @@ async fn lookup_batch(
                         error: None,
                     }
                 }
-                Err(e) => BatchLookupItem {
+                Err((_, json_err)) => BatchLookupItem {
                     found: false,
                     query: lookup_req.query,
                     response: None,
                     similarity: None,
-                    error: Some(e),
+                    error: Some(json_err.0.error),
                 },
             }
         }
@@ -296,10 +337,10 @@ fn prune_expired(cache: &mut LruCache<String, CacheEntry>, ttl: Duration) {
 
 async fn stats(
     State(state): State<SharedState>,
-) -> Result<Json<StatsResponse>, (StatusCode, String)> {
+) -> Result<Json<StatsResponse>, ApiError> {
     let mut s = state
         .lock()
-        .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "mutex poisoned".to_string()))?;
+        .map_err(|_| internal_error("mutex poisoned"))?;
 
     let ttl = s.ttl;
     prune_expired(&mut s.cache, ttl);
