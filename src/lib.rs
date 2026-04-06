@@ -1,5 +1,6 @@
 pub mod lru;
 pub use lru::LruCache;
+use std::time::{Duration, Instant};
 
 use axum::{
     extract::State,
@@ -17,6 +18,7 @@ pub struct CacheEntry {
     pub query: String,
     pub embedding: Vec<f32>,
     pub response: String,
+    pub inserted_at: Instant,
 }
 
 #[derive(Debug)]
@@ -25,6 +27,7 @@ pub struct AppState{
     pub cache: LruCache<String, CacheEntry>,
     pub hit_count: usize,
     pub miss_count: usize,
+    pub ttl: Duration,
 }
 
 pub type SharedState = Arc<Mutex<AppState>>;
@@ -168,11 +171,15 @@ async fn cache(
         query: req.query,
         embedding: req.embedding,
         response: req.response,
+        inserted_at: Instant::now(),
     };
 
     let mut s = state // state is Arc<Mutex<AppState>>
         .lock()
         .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "mutex poisoned".to_string()))?;
+
+    let ttl = s.ttl;
+    prune_expired(&mut s.cache, ttl);
 
     //s.entries.push(entry);
     s.cache.insert(entry.query.clone(), entry);
@@ -186,6 +193,9 @@ async fn lookup(
     let mut s = state
         .lock()
         .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "mutex poisoned".to_string()))?;
+
+    let ttl = s.ttl;
+    prune_expired(&mut s.cache, ttl);
 
     // lookup_best_match() owns matching logic and recency update
     // /lookup does HTTP level handling
@@ -226,6 +236,9 @@ async fn lookup_batch(
                 }
             };
 
+            let ttl = s.ttl;
+            prune_expired(&mut s.cache, ttl);
+
             match lookup_best_match(&mut s.cache, &lookup_req) {
                 Ok(Some((query, response, similarity))) => {
                     s.hit_count += 1;
@@ -261,14 +274,35 @@ async fn lookup_batch(
     Ok(Json(join_all(futures).await))
 }
 
+fn prune_expired(cache: &mut LruCache<String, CacheEntry>, ttl: Duration) {
+    let now = Instant::now();
+
+    let expired_keys: Vec<String> = cache
+        .iter()
+        .filter_map(|(key, entry)| {
+            if now.duration_since(entry.inserted_at) > ttl {
+                Some(key.clone())
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    for key in expired_keys {
+        let _ = cache.remove(&key);
+    }
+}
 
 
 async fn stats(
     State(state): State<SharedState>,
 ) -> Result<Json<StatsResponse>, (StatusCode, String)> {
-    let s = state
+    let mut s = state
         .lock()
         .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "mutex poisoned".to_string()))?;
+
+    let ttl = s.ttl;
+    prune_expired(&mut s.cache, ttl);
 
     let total = s.hit_count + s.miss_count;
     let hit_rate = if total == 0 {

@@ -1,6 +1,7 @@
 use minicache::{build_app, AppState, SharedState};
 use minicache::lru::LruCache;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 #[tokio::main]
 async fn main() {
@@ -8,6 +9,7 @@ async fn main() {
         cache: LruCache::new(100),
         hit_count: 0,
         miss_count: 0,
+        ttl: Duration::from_secs(60),
     }));
 
     let app = build_app(state);
