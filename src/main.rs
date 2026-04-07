@@ -1,5 +1,5 @@
-use minicache::{build_app, AppState, SharedState};
 use minicache::lru::LruCache;
+use minicache::{AppState, SharedState, build_app};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -14,9 +14,7 @@ async fn main() {
 
     let app = build_app(state);
 
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:3000")
-        .await
-        .unwrap();
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
 
     axum::serve(listener, app).await.unwrap();
 }

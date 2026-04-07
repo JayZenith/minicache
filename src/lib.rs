@@ -3,15 +3,15 @@ pub use lru::LruCache;
 use std::time::{Duration, Instant};
 
 use axum::{
+    Json, Router,
     extract::State,
     http::StatusCode,
     routing::{get, post},
-    Json, Router,
 };
 
+use futures::future::join_all;
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
-use futures::future::join_all;
 
 #[derive(Clone, Debug)]
 pub struct CacheEntry {
@@ -22,7 +22,7 @@ pub struct CacheEntry {
 }
 
 #[derive(Debug)]
-pub struct AppState{
+pub struct AppState {
     //entries: Vec<CacheEntry>, // placeholder, later the LRU as cache: LruCache<...,...>
     pub cache: LruCache<String, CacheEntry>,
     pub hit_count: usize,
@@ -30,6 +30,12 @@ pub struct AppState{
     pub ttl: Duration,
 }
 
+// Concurrency choice:
+// I use Arc<Mutex<AppState>> rather than Arc<RwLock<AppState>>.
+// Although cache lookups may sound read-heavy, LRU get()/touch logic mutates
+// recency order, and hit/miss counters also mutate shared state.
+// That means the dominant access pattern is effectively write-heavy, so a
+// Mutex is simpler and more appropriate here than an RwLock.
 pub type SharedState = Arc<Mutex<AppState>>;
 
 #[derive(Deserialize)]
@@ -59,11 +65,6 @@ struct StatsResponse {
     miss_count: usize,
     cache_size: usize,
     hit_rate: f64,
-}
-
-#[derive(Deserialize)]
-struct BatchLookupRequest {
-    requests: Vec<LookupRequest>,
 }
 
 #[derive(Serialize)]
@@ -110,7 +111,6 @@ fn not_found(message: impl Into<String>) -> ApiError {
     )
 }
 
-
 fn cosine_similarity(a: &[f32], b: &[f32]) -> Result<f32, String> {
     if a.len() != b.len() {
         return Err("embedding length mismatch".to_string());
@@ -137,10 +137,6 @@ fn lookup_best_match(
     cache: &mut LruCache<String, CacheEntry>,
     req: &LookupRequest,
 ) -> Result<Option<(String, String, f32)>, ApiError> {
-    // validate_non_empty("query", &req.query).map_err(|(_, e)| e)?;
-    // validate_embedding(&req.embedding).map_err(|(_, e)| e)?;
-    // validate_threshold(req.threshold).map_err(|(_, e)| e)?;
-    //
     validate_non_empty("query", &req.query)?;
     validate_embedding(&req.embedding)?;
     validate_threshold(req.threshold)?;
@@ -150,9 +146,14 @@ fn lookup_best_match(
         let mut best_response: Option<String> = None;
         let mut best_similarity = f32::NEG_INFINITY;
 
+        // for (key, entry) in cache.iter() {
+        //     let sim = cosine_similarity(&req.embedding, &entry.embedding)
+        //         .map_err(bad_request)?;
         for (key, entry) in cache.iter() {
-            let sim = cosine_similarity(&req.embedding, &entry.embedding)
-                .map_err(bad_request)?;
+            let sim = match cosine_similarity(&req.embedding, &entry.embedding) {
+                Ok(sim) => sim,
+                Err(_) => continue,
+            };
 
             if sim > best_similarity {
                 best_similarity = sim;
@@ -176,7 +177,6 @@ fn lookup_best_match(
 async fn health() -> &'static str {
     "OK"
 }
-
 
 // VALIDATION HELPERS
 fn validate_embedding(embedding: &[f32]) -> Result<(), ApiError> {
@@ -231,16 +231,14 @@ async fn lookup(
     State(state): State<SharedState>,
     Json(req): Json<LookupRequest>,
 ) -> Result<Json<LookupResponse>, ApiError> {
-    let mut s = state
-        .lock()
-        .map_err(|_| internal_error("mutex poisoned"))?;
+    let mut s = state.lock().map_err(|_| internal_error("mutex poisoned"))?;
 
     let ttl = s.ttl;
     prune_expired(&mut s.cache, ttl);
 
     // lookup_best_match() owns matching logic and recency update
     // /lookup does HTTP level handling
-    match lookup_best_match(&mut s.cache, &req){
+    match lookup_best_match(&mut s.cache, &req) {
         Ok(Some((query, response, similarity))) => {
             s.hit_count += 1;
             Ok(Json(LookupResponse {
@@ -253,15 +251,20 @@ async fn lookup(
             s.miss_count += 1;
             Err(not_found("no matching cached response"))
         }
-        Err(e) => Err(e)
+        Err(e) => Err(e),
     }
 }
 
+// async fn lookup_batch(
+//     State(state): State<SharedState>,
+//     Json(req): Json<BatchLookupRequest>,
+// ) -> Result<Json<Vec<BatchLookupItem>>, ApiError> {
 async fn lookup_batch(
     State(state): State<SharedState>,
-    Json(req): Json<BatchLookupRequest>,
+    Json(requests): Json<Vec<LookupRequest>>,
 ) -> Result<Json<Vec<BatchLookupItem>>, ApiError> {
-    let futures = req.requests.into_iter().map(|lookup_req| {
+    // let futures = req.requests.into_iter().map(|lookup_req| {
+    let futures = requests.into_iter().map(|lookup_req| {
         let state = Arc::clone(&state);
         async move {
             let mut s = match state.lock() {
@@ -273,7 +276,7 @@ async fn lookup_batch(
                         response: None,
                         similarity: None,
                         error: Some("mutex poisoned".to_string()),
-                    }
+                    };
                 }
             };
 
@@ -334,13 +337,8 @@ fn prune_expired(cache: &mut LruCache<String, CacheEntry>, ttl: Duration) {
     }
 }
 
-
-async fn stats(
-    State(state): State<SharedState>,
-) -> Result<Json<StatsResponse>, ApiError> {
-    let mut s = state
-        .lock()
-        .map_err(|_| internal_error("mutex poisoned"))?;
+async fn stats(State(state): State<SharedState>) -> Result<Json<StatsResponse>, ApiError> {
+    let mut s = state.lock().map_err(|_| internal_error("mutex poisoned"))?;
 
     let ttl = s.ttl;
     prune_expired(&mut s.cache, ttl);
@@ -360,7 +358,6 @@ async fn stats(
     }))
 }
 
-
 // app-building
 pub fn build_app(state: SharedState) -> Router {
     Router::new()
@@ -371,7 +368,6 @@ pub fn build_app(state: SharedState) -> Router {
         .route("/lookup/batch", post(lookup_batch))
         .with_state(state)
 }
-
 
 #[cfg(test)]
 mod tests {

@@ -1,11 +1,11 @@
 use axum::{
-    body::{to_bytes, Body},
+    body::{Body, to_bytes},
     http::{Request, StatusCode},
 };
 use tower::ServiceExt;
 
-use minicache::{build_app, AppState, SharedState};
 use minicache::lru::LruCache;
+use minicache::{AppState, SharedState, build_app};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::time::sleep;
@@ -49,7 +49,9 @@ async fn cache_and_lookup_work() {
                 .uri("/cache")
                 .method("POST")
                 .header("content-type", "application/json")
-                .body(Body::from(r#"{"query":"a","embedding":[1.0,0.0],"response":"A"}"#))
+                .body(Body::from(
+                    r#"{"query":"a","embedding":[1.0,0.0],"response":"A"}"#,
+                ))
                 .unwrap(),
         )
         .await
@@ -63,7 +65,9 @@ async fn cache_and_lookup_work() {
                 .uri("/lookup")
                 .method("POST")
                 .header("content-type", "application/json")
-                .body(Body::from(r#"{"query":"qa","embedding":[1.0,0.0],"threshold":0.8}"#))
+                .body(Body::from(
+                    r#"{"query":"qa","embedding":[1.0,0.0],"threshold":0.8}"#,
+                ))
                 .unwrap(),
         )
         .await
@@ -83,7 +87,9 @@ async fn stats_updates_after_hit_and_miss() {
                 .uri("/cache")
                 .method("POST")
                 .header("content-type", "application/json")
-                .body(Body::from(r#"{"query":"a","embedding":[1.0,0.0],"response":"A"}"#))
+                .body(Body::from(
+                    r#"{"query":"a","embedding":[1.0,0.0],"response":"A"}"#,
+                ))
                 .unwrap(),
         )
         .await
@@ -96,7 +102,9 @@ async fn stats_updates_after_hit_and_miss() {
                 .uri("/lookup")
                 .method("POST")
                 .header("content-type", "application/json")
-                .body(Body::from(r#"{"query":"qa","embedding":[1.0,0.0],"threshold":0.8}"#))
+                .body(Body::from(
+                    r#"{"query":"qa","embedding":[1.0,0.0],"threshold":0.8}"#,
+                ))
                 .unwrap(),
         )
         .await
@@ -109,7 +117,9 @@ async fn stats_updates_after_hit_and_miss() {
                 .uri("/lookup")
                 .method("POST")
                 .header("content-type", "application/json")
-                .body(Body::from(r#"{"query":"qb","embedding":[0.0,1.0],"threshold":0.99}"#))
+                .body(Body::from(
+                    r#"{"query":"qb","embedding":[0.0,1.0],"threshold":0.99}"#,
+                ))
                 .unwrap(),
         )
         .await
@@ -147,7 +157,9 @@ async fn batch_lookup_returns_mixed_results() {
                 .uri("/cache")
                 .method("POST")
                 .header("content-type", "application/json")
-                .body(Body::from(r#"{"query":"a","embedding":[1.0,0.0],"response":"A"}"#))
+                .body(Body::from(
+                    r#"{"query":"a","embedding":[1.0,0.0],"response":"A"}"#,
+                ))
                 .unwrap(),
         )
         .await
@@ -160,7 +172,7 @@ async fn batch_lookup_returns_mixed_results() {
                 .method("POST")
                 .header("content-type", "application/json")
                 .body(Body::from(
-                    r#"{"requests":[{"query":"x","embedding":[1.0,0.0],"threshold":0.8},{"query":"","embedding":[1.0,0.0],"threshold":0.8}]}"#,
+                    r#"[{"query":"x","embedding":[1.0,0.0],"threshold":0.8},{"query":"","embedding":[1.0,0.0],"threshold":0.8}]"#,
                 ))
                 .unwrap(),
         )
@@ -176,7 +188,6 @@ async fn batch_lookup_returns_mixed_results() {
     assert!(body_str.contains(r#""error":"query must not be empty""#));
 }
 
-
 #[tokio::test]
 async fn expired_entry_is_pruned_and_lookup_misses() {
     let app = test_app();
@@ -188,7 +199,9 @@ async fn expired_entry_is_pruned_and_lookup_misses() {
                 .uri("/cache")
                 .method("POST")
                 .header("content-type", "application/json")
-                .body(Body::from(r#"{"query":"a","embedding":[1.0,0.0],"response":"A"}"#))
+                .body(Body::from(
+                    r#"{"query":"a","embedding":[1.0,0.0],"response":"A"}"#,
+                ))
                 .unwrap(),
         )
         .await
@@ -205,7 +218,9 @@ async fn expired_entry_is_pruned_and_lookup_misses() {
                 .uri("/lookup")
                 .method("POST")
                 .header("content-type", "application/json")
-                .body(Body::from(r#"{"query":"a","embedding":[1.0,0.0],"threshold":0.8}"#))
+                .body(Body::from(
+                    r#"{"query":"a","embedding":[1.0,0.0],"threshold":0.8}"#,
+                ))
                 .unwrap(),
         )
         .await
