@@ -55,12 +55,13 @@ curl -i http://127.0.0.1:3000/stats
 * LRU Cache: HashMap and index-based doubly linked list -> O(1) get/insert, no external crates, no unsafe
 * Semantic Lookup: Linear scan (O(n)); LRU handles eviction, not similarity search
 * Concurrency: Arc<Mutex<_>> since lookups mutate recency and counters; effectively write-heavy
-* TTL: Lazy execution on access; avoids background complexity
-* Batch Behavior: Uses async task fan-out, but shared mutex and LRU mutation serialize cache access
+* TTL: Lazy execution on access (not "execution"); avoids background complexity
+* Batch Behavior: POST `/lookup/batch` fans out work with async futures, but shared `Mutex<AppState>` still serializes cache access. This is intentional because lookups mutate LRU recency and hit/miss counters, so simpler correctness was prioritized over maximum batch throughput.
 * Error Handling:
   * 400 invalid input
   * 404 no match
   * 500 internal failure
+
 
 ## Improvements
 * Replace linear scan with ANN/vector index
