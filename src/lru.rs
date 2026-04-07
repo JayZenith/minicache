@@ -12,7 +12,7 @@ struct Node<K, V> {
 #[derive(Debug)]
 pub struct LruCache<K, V>
 where
-    K: Eq + Hash + Clone, //Keys must support equality, hashing, and cloning to work in HashMap and be copied
+    K: Eq + Hash + Clone,
 {
     capacity: usize,
     map: HashMap<K, usize>,
@@ -59,8 +59,8 @@ where
 
     pub fn get(&mut self, key: &K) -> Option<&V> {
         let idx = *self.map.get(key)?;
-        self.move_to_front(idx); //node just used
-        self.nodes[idx].as_ref().map(|node| &node.value) //return immutable ref to value
+        self.move_to_front(idx);
+        self.nodes[idx].as_ref().map(|node| &node.value)
     }
 
     pub fn get_mut(&mut self, key: &K) -> Option<&mut V> {
@@ -69,8 +69,6 @@ where
         self.nodes[idx].as_mut().map(|node| &mut node.value)
     }
 
-    // if key exists; it updates value and moves it to rront
-    // else evict LRU item and attach to front
     pub fn insert(&mut self, key: K, value: V) {
         if let Some(&idx) = self.map.get(&key) {
             if let Some(node) = self.nodes[idx].as_mut() {
@@ -96,8 +94,6 @@ where
         self.len += 1;
     }
 
-    // remove key from hashmap, detaches node from linked list, decrements list
-    // and removes node from nodes, puts slot into free_list, and return val
     pub fn remove(&mut self, key: &K) -> Option<V> {
         let idx = self.map.remove(key)?;
         self.detach(idx);
@@ -108,14 +104,12 @@ where
         Some(node.value)
     }
 
-    // grab tail, clone key, remove
     fn evict_lru(&mut self) {
         let tail_idx = self.tail.expect("tail must exist when evicting");
         let key = self.nodes[tail_idx].as_ref().unwrap().key.clone();
         let _ = self.remove(&key);
     }
 
-    // reuse empty slot from free_list
     fn alloc_node(&mut self, node: Node<K, V>) -> usize {
         if let Some(idx) = self.free_list.pop() {
             self.nodes[idx] = Some(node);

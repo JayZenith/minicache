@@ -146,9 +146,6 @@ fn lookup_best_match(
         let mut best_response: Option<String> = None;
         let mut best_similarity = f32::NEG_INFINITY;
 
-        // for (key, entry) in cache.iter() {
-        //     let sim = cosine_similarity(&req.embedding, &entry.embedding)
-        //         .map_err(bad_request)?;
         for (key, entry) in cache.iter() {
             let sim = match cosine_similarity(&req.embedding, &entry.embedding) {
                 Ok(sim) => sim,
@@ -215,14 +212,11 @@ async fn cache(
         inserted_at: Instant::now(),
     };
 
-    let mut s = state // state is Arc<Mutex<AppState>>
-        .lock()
-        .map_err(|_| internal_error("mutex poisoned"))?;
+    let mut s = state.lock().map_err(|_| internal_error("mutex poisoned"))?;
 
     let ttl = s.ttl;
     prune_expired(&mut s.cache, ttl);
 
-    //s.entries.push(entry);
     s.cache.insert(entry.query.clone(), entry);
     Ok(StatusCode::CREATED)
 }
@@ -236,8 +230,6 @@ async fn lookup(
     let ttl = s.ttl;
     prune_expired(&mut s.cache, ttl);
 
-    // lookup_best_match() owns matching logic and recency update
-    // /lookup does HTTP level handling
     match lookup_best_match(&mut s.cache, &req) {
         Ok(Some((query, response, similarity))) => {
             s.hit_count += 1;
@@ -255,15 +247,10 @@ async fn lookup(
     }
 }
 
-// async fn lookup_batch(
-//     State(state): State<SharedState>,
-//     Json(req): Json<BatchLookupRequest>,
-// ) -> Result<Json<Vec<BatchLookupItem>>, ApiError> {
 async fn lookup_batch(
     State(state): State<SharedState>,
     Json(requests): Json<Vec<LookupRequest>>,
 ) -> Result<Json<Vec<BatchLookupItem>>, ApiError> {
-    // let futures = req.requests.into_iter().map(|lookup_req| {
     let futures = requests.into_iter().map(|lookup_req| {
         let state = Arc::clone(&state);
         async move {

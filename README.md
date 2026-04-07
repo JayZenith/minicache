@@ -39,11 +39,11 @@ curl -i -X POST http://127.0.0.1:3000/lookup \
 -d '{"query":"hi","embedding":[1.0,0.0],"threshold":0.8}'
 ```
 
-### Batch Lookup
+### Batch Lookup (Accepts raw JSON array)
 ```bash
 curl -i -X POST http://127.0.0.1:3000/lookup/batch \
 -H "Content-Type: application/json" \
--d '{"requests":[{"query":"q1","embedding":[1.0,0.0],"threshold":0.8},{"query":"q2","embedding":[0.0,1.0],"threshold":0.8}]}'
+-d '[{"query":"q1","embedding":[1.0,0.0],"threshold":0.8},{"query":"q2","embedding":[0.0,1.0],"threshold":0.8}]'
 ```
 
 ### Stats
@@ -52,11 +52,11 @@ curl -i http://127.0.0.1:3000/stats
 ```
 
 ## Design Decisions
-* LRU Cache: HashMap and index-based doubly linked list -> O(1) get/insert, no external crates, no unsage
-* Sematic Lookup: Linear scan (O(n)), keeps LRU and similarity concerns 
-* Concurrency: Arc<Mutex<_>> since lookups mutate recency; RwLock adds little benefit here 
+* LRU Cache: HashMap and index-based doubly linked list -> O(1) get/insert, no external crates, no unsafe
+* Semantic Lookup: Linear scan (O(n)); LRU handles eviction, not similarity search
+* Concurrency: Arc<Mutex<_>> since lookups mutate recency and counters; effectively write-heavy
 * TTL: Lazy execution on access; avoids background complexity
-* Shared Logic: SIngle lookup helper reused across endpoints
+* Batch Behavior: Uses async task fan-out, but shared mutex and LRU mutation serialize cache access
 * Error Handling:
   * 400 invalid input
   * 404 no match
@@ -66,8 +66,7 @@ curl -i http://127.0.0.1:3000/stats
 * Replace linear scan with ANN/vector index
 * Reduce lock contention (sharding or finer-grained locking)
 * Configurable TTL and capacity
-* Structured JSON error responses
-* Optional background TTL cleanup
+* Background TTL cleanup (optional)
 
 ## Tests
 ```bash
