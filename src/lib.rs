@@ -23,7 +23,6 @@ pub struct CacheEntry {
 
 #[derive(Debug)]
 pub struct AppState {
-    //entries: Vec<CacheEntry>, // placeholder, later the LRU as cache: LruCache<...,...>
     pub cache: LruCache<String, CacheEntry>,
     pub hit_count: usize,
     pub miss_count: usize,
