@@ -70,12 +70,14 @@ struct StatsResponse {
 struct BatchLookupItem {
     found: bool,
     query: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     response: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     similarity: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     error: Option<String>,
 }
 
-// ERROR HANDLING
 #[derive(Serialize)]
 struct ErrorResponse {
     error: String,
@@ -140,9 +142,8 @@ fn lookup_best_match(
     validate_embedding(&req.embedding)?;
     validate_threshold(req.threshold)?;
 
-    let (best_key, best_response, best_similarity) = {
-        let mut best_key: Option<String> = None;
-        let mut best_response: Option<String> = None;
+    let (best_match, best_similarity) = {
+        let mut best: Option<(String, String)> = None;
         let mut best_similarity = f32::NEG_INFINITY;
 
         for (key, entry) in cache.iter() {
@@ -153,16 +154,15 @@ fn lookup_best_match(
 
             if sim > best_similarity {
                 best_similarity = sim;
-                best_key = Some(key.clone());
-                best_response = Some(entry.response.clone());
+                best = Some((key.clone(), entry.response.clone()));
             }
         }
 
-        (best_key, best_response, best_similarity)
+        (best, best_similarity)
     };
 
-    match (best_key, best_response) {
-        (Some(key), Some(response)) if best_similarity >= req.threshold => {
+    match best_match {
+        Some((key, response)) if best_similarity >= req.threshold => {
             cache.touch(&key);
             Ok(Some((key, response, best_similarity)))
         }
@@ -174,7 +174,6 @@ async fn health() -> &'static str {
     "OK"
 }
 
-// VALIDATION HELPERS
 fn validate_embedding(embedding: &[f32]) -> Result<(), ApiError> {
     if embedding.is_empty() {
         return Err(bad_request("embedding must not be empty"));
@@ -344,7 +343,6 @@ async fn stats(State(state): State<SharedState>) -> Result<Json<StatsResponse>, 
     }))
 }
 
-// app-building
 pub fn build_app(state: SharedState) -> Router {
     Router::new()
         .route("/health", get(health))

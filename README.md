@@ -16,7 +16,6 @@ Server runs on:
 0.0.0.0:3000
 ```
 
-
 ## Endpoints
 * POST /cache
 * POST /lookup
@@ -24,7 +23,7 @@ Server runs on:
 * GET /health
 * GET /stats
 
-## Example Requests 
+## Example Requests
 ### Cache
 ```bash
 curl -i -X POST http://127.0.0.1:3000/cache \
@@ -46,6 +45,11 @@ curl -i -X POST http://127.0.0.1:3000/lookup/batch \
 -d '[{"query":"q1","embedding":[1.0,0.0],"threshold":0.8},{"query":"q2","embedding":[0.0,1.0],"threshold":0.8}]'
 ```
 
+### Health
+```bash
+curl -i http://127.0.0.1:3000/health
+```
+
 ### Stats
 ```bash
 curl -i http://127.0.0.1:3000/stats
@@ -55,7 +59,7 @@ curl -i http://127.0.0.1:3000/stats
 * LRU Cache: HashMap and index-based doubly linked list -> O(1) get/insert, no external crates, no unsafe
 * Semantic Lookup: Linear scan (O(n)); LRU handles eviction, not similarity search
 * Concurrency: Arc<Mutex<_>> since lookups mutate recency and counters; effectively write-heavy
-* TTL: Lazy execution on access (not "execution"); avoids background complexity
+* TTL: Lazy expiration on access; avoids background complexity
 * Batch Behavior: POST `/lookup/batch` fans out work with async futures, but shared `Mutex<AppState>` still serializes cache access. This is intentional because lookups mutate LRU recency and hit/miss counters, so simpler correctness was prioritized over maximum batch throughput.
 * Error Handling:
   * 400 invalid input
@@ -66,7 +70,7 @@ curl -i http://127.0.0.1:3000/stats
 ## Improvements
 * Replace linear scan with ANN/vector index
 * Reduce lock contention (sharding or finer-grained locking)
-* Configurable TTL and capacity
+* Expose TTL and capacity as environment variables or config file
 * Background TTL cleanup (optional)
 
 ## Tests

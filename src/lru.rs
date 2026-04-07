@@ -23,7 +23,6 @@ where
     len: usize,
 }
 
-//attach methods to struct
 impl<K, V> LruCache<K, V>
 where
     K: Eq + Hash + Clone,
@@ -49,10 +48,6 @@ where
         self.len == 0
     }
 
-    pub fn capacity(&self) -> usize {
-        self.capacity
-    }
-
     pub fn contains_key(&self, key: &K) -> bool {
         self.map.contains_key(key)
     }
@@ -61,12 +56,6 @@ where
         let idx = *self.map.get(key)?;
         self.move_to_front(idx);
         self.nodes[idx].as_ref().map(|node| &node.value)
-    }
-
-    pub fn get_mut(&mut self, key: &K) -> Option<&mut V> {
-        let idx = *self.map.get(key)?;
-        self.move_to_front(idx);
-        self.nodes[idx].as_mut().map(|node| &mut node.value)
     }
 
     pub fn insert(&mut self, key: K, value: V) {
@@ -150,11 +139,8 @@ where
     }
 
     fn attach_front(&mut self, idx: usize) {
-        {
-            let node = self.nodes[idx].as_mut().unwrap();
-            node.prev = None;
-            node.next = self.head;
-        }
+        self.nodes[idx].as_mut().unwrap().prev = None;
+        self.nodes[idx].as_mut().unwrap().next = self.head;
 
         if let Some(old_head) = self.head {
             self.nodes[old_head].as_mut().unwrap().prev = Some(idx);
@@ -184,12 +170,10 @@ where
     }
 }
 
-// TESTS
 #[cfg(test)]
 mod tests {
     use super::LruCache;
 
-    // access "a" and evict "b"
     #[test]
     fn evicts_least_recently_used() {
         let mut cache = LruCache::new(2);
@@ -203,7 +187,6 @@ mod tests {
         assert!(cache.contains_key(&"c"));
     }
 
-    // checks capacity=1 and keep newest
     #[test]
     fn capacity_one() {
         let mut cache = LruCache::new(1);
@@ -214,7 +197,6 @@ mod tests {
         assert!(cache.contains_key(&"b"));
     }
 
-    // a should be 10 and b should get evicted
     #[test]
     fn duplicate_key_updates_value_and_recency() {
         let mut cache = LruCache::new(2);
