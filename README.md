@@ -16,12 +16,19 @@ Server runs on:
 0.0.0.0:3000
 ```
 
-## Endpoints
-* POST /cache
-* POST /lookup
-* POST /lookup/batch
-* GET /health
-* GET /stats
+## API
+- POST /cache — store (query, embedding, response)
+- POST /lookup — semantic match via cosine similarity (thresholded)
+- POST /lookup/batch — concurrent lookup (join_all)
+- GET /health — liveness
+- GET /stats — hit/miss and cache size
+
+## Spec Compliance
+- LRU Cache: O(1) get/insert/evict via HashMap and DLL
+- Cosine Similarity: manual implementation with zero-vector and length checks
+- Async API: axum and tokio, JSON via serde
+- Concurrency: Arc<Mutex<AppState>> (write-heavy workload)
+- Error Handling: proper HTTP status codes (400/404/500)
 
 ## Example Requests
 ### Cache
@@ -38,7 +45,7 @@ curl -i -X POST http://127.0.0.1:3000/lookup \
 -d '{"query":"hi","embedding":[1.0,0.0],"threshold":0.8}'
 ```
 
-### Batch Lookup (Accepts raw JSON array)
+### Batch Lookup
 ```bash
 curl -i -X POST http://127.0.0.1:3000/lookup/batch \
 -H "Content-Type: application/json" \
@@ -56,7 +63,7 @@ curl -i http://127.0.0.1:3000/stats
 ```
 
 ## Design Decisions
-* LRU Cache: HashMap and index-based doubly linked list -> O(1) get/insert, no external crates, no unsafe
+* LRU Cache: HashMap and index-based doubly linked list -> O(1) get/insert, no external crates
 * Semantic Lookup: Linear scan (O(n)); LRU handles eviction, not similarity search
 * Concurrency: Arc<Mutex<_>> since lookups mutate recency and counters; effectively write-heavy
 * TTL: Lazy expiration on access; avoids background complexity
